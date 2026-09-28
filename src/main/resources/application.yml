@@ -1,0 +1,84 @@
+spring:
+  application:
+    name: atlas-platform
+  datasource:
+    url: jdbc:postgresql://localhost:5432/atlas
+    username: atlas
+    password: atlas
+  jpa:
+    open-in-view: false
+    hibernate:
+      # Flyway owns the schema. Letting Hibernate generate DDL means the shape of the
+      # database depends on the shape of the code at deploy time, which is not reviewable
+      # and not reversible.
+      ddl-auto: validate
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+
+  modulith:
+    events:
+      # A process that dies mid-listener leaves the publication incomplete, and without this the
+      # cascade behind it never runs again: the write succeeded, so nothing looks wrong.
+      republish-outstanding-events-on-restart: true
+      jdbc:
+        # Modulith creates and owns the event_publication table; Flyway owns ours. Mixing
+        # the two means a Modulith upgrade that adds a column silently fails schema
+        # validation at startup, which a Postgres-backed integration test caught here and
+        # H2 with generated DDL would have hidden until deployment.
+        schema-initialization:
+          enabled: true
+
+atlas:
+  # Identity providers this deployment trusts.
+  #
+  # Empty locally, so the platform and its tests run without standing one up; the snapshot
+  # endpoint then logs a warning on every issuance because that mode is indistinguishable from a
+  # working one until somebody deploys it. Set `required: true` in every deployed environment and
+  # the application refuses to start rather than start unable to verify anybody.
+  #
+  # Local Keycloak (docker compose up):
+  #   identity:
+  #     required: true
+  #     providers:
+  #       - issuer: http://localhost:8080/realms/atlas
+  #         audience: atlas-platform
+  #         tenant-claim: atlas_tenant
+  #         principal-claim: atlas_principal
+  #
+  # Okta is the same shape. Nothing in the code changes, and both can be trusted at once while
+  # a migration is in flight:
+  #   identity:
+  #     required: true
+  #     providers:
+  #       - issuer: https://YOUR-ORG.okta.com/oauth2/default
+  #         audience: api://atlas
+  #         tenant-claim: atlas_tenant        # an Okta custom claim on the authorization server
+  #         principal-claim: sub
+  #
+  # jwks-uri is optional: left unset the issuer is resolved by OIDC discovery, which is what
+  # keeps one vendor's URL layout out of the platform.
+  identity:
+    required: false
+    providers: []
+
+  security:
+    # True so the local stack and every integration test start. Production sets it false, and
+    # the application then refuses to come up against a datastore that would carry licensed
+    # content in the clear. The danger this guards is not a wrong setting; it is a wrong
+    # setting that looks identical to a right one from the outside.
+    allow-insecure-datastores: ${ATLAS_ALLOW_INSECURE_DATASTORES:true}
+    open-search-url: ${ATLAS_INDEXING_OPENSEARCH_URL:}
+    datasource-url: ${SPRING_DATASOURCE_URL:}
+
+  entitlement:
+    # Overridden per environment from a secret store. The default exists so a developer can
+    # start the application; HmacSnapshotSigner rejects anything under 32 characters at
+    # startup rather than at first use.
+    signing-key: ${ATLAS_ENTITLEMENT_SIGNING_KEY:development-only-signing-key-not-for-production}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,modulith
